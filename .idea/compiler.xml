@@ -10,13 +10,13 @@
       </profile>
     </annotationProcessing>
     <bytecodeTargetLevel>
-      <module name="rower" target="1.8" />
+      <module name="rower" target="11" />
       <module name="untitled" target="1.8" />
     </bytecodeTargetLevel>
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
-      <module name="rower" options="-parameters" />
+      <module name="rower" options="" />
       <module name="untitled" options="-parameters" />
     </option>
   </component>

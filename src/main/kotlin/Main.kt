@@ -1,6 +1,6 @@
-import java.io.BufferedReader
-import java.io.File
-import java.io.FileInputStream
+import model.SQL
+import service.GoogleApi
+import service.Mailer
 import java.io.IOException
 import java.sql.DriverManager
 import java.sql.Statement
@@ -8,114 +8,100 @@ import java.time.Instant
 import kotlin.system.exitProcess
 
 class Main {
-
     companion object {
-
-        private var dir = ""
-        private var host = ""
-        private var user = ""
-        private var password = ""
-
-        private var timestamp = Instant.now()
-        private var errorCount = 0
-        private val errorMsg = StringBuilder()
-        private val sql = StringBuilder()
-        private lateinit var fileList: List<File>
+        private var SHEET_ID: String = ""
+        private var SHEET_RANGE: String = ""
+        private var DATABASE_ENDPOINT: String = ""
+        private var DATABASE_USER: String = ""
+        private var DATABASE_KEY: String = ""
+        private var MAIL_USER: String = ""
+        private var MAIL_KEY: String = ""
+        private var GOOGLE_CONFIG_FILE: String = ""
+        private const val DATABASE_PARAMETERS = "useTimezone=true&serverTimezone=UTC&verifyServerCertificate=false&useSSL=false&allowMultiQueries=true"
+        private const val HOME_DIR = "/dados"
+        private var mailer: Mailer? = null
 
         @JvmStatic
         fun main(args: Array<String>) {
-
             try {
                 args.forEach {
                     when (it) {
-                        "-dir" -> dir = args[args.indexOf(it) + 1]
-                        "-host" -> host =
-                            "jdbc:mysql://${args[args.indexOf(it) + 1]}:3306/?useTimezone=true&serverTimezone=UTC&verifyServerCertificate=false&useSSL=false&allowMultiQueries=true"
-                        "-user" -> user = args[args.indexOf(it) + 1]
-                        "-password" -> password = args[args.indexOf(it) + 1]
+                        "-sheetid" -> SHEET_ID = args[args.indexOf(it) + 1]
+                        "-sheetrange" -> SHEET_RANGE = args[args.indexOf(it) + 1]
+                        "-dbhost" -> DATABASE_ENDPOINT =
+                            "jdbc:mysql://${args[args.indexOf(it) + 1]}:3306/?$DATABASE_PARAMETERS"
+                        "-dbuser" -> DATABASE_USER = args[args.indexOf(it) + 1]
+                        "-dbkey" -> DATABASE_KEY = args[args.indexOf(it) + 1]
+                        "-mailuser" -> MAIL_USER = args[args.indexOf(it) + 1]
+                        "-mailkey" -> MAIL_KEY = args[args.indexOf(it) + 1]
+                        "-googlekey" -> GOOGLE_CONFIG_FILE = args[args.indexOf(it) + 1]
                     }
                 }
-
-                try {
-                    fileList = File(dir).listFiles()!!.toList()
-                } catch (e: NullPointerException) {
-                    println("Empty Directory")
-                    return
+                if (SHEET_ID.isEmpty() || SHEET_RANGE.isEmpty() || DATABASE_ENDPOINT.isEmpty() || DATABASE_USER.isEmpty() || DATABASE_KEY.isEmpty() || GOOGLE_CONFIG_FILE.isEmpty()) {
+                    throw Exception()
+                } else {
+                    if (MAIL_USER.isNotEmpty() || MAIL_KEY.isNotEmpty()) mailer = Mailer(MAIL_USER, MAIL_KEY)
                 }
-
-                if (dir.isNotEmpty() && host.isNotEmpty() && user.isNotEmpty() && password.isNotEmpty()) {
-                    execute()
-                }
-
             } catch (e: Exception) {
-                println("Invalid parameters")
+                val errorMessage = StringBuilder()
+                errorMessage.append("Invalid Parameters")
+                errorMessage.append("Expected parameters")
+                errorMessage.append("-sheetid (ID do google sheets)")
+                errorMessage.append("-sheetrange (Range da planilha, ex: PLAN!A1:D5)")
+                errorMessage.append("-dbhost (Endpoint do banco de dados)")
+                errorMessage.append("-dbuser (Usuário do banco de dados)")
+                errorMessage.append("-dbkey (Senha do banco de dados)")
+                errorMessage.append("-mailuser (Endereço de mail (origem) para envio de notificações)")
+                errorMessage.append("-mailkey (Senha do e-mail fornecido)")
+                errorMessage.append("-googlekey (Token JSON da API do google)")
+                errorMessage.append(e.message)
                 exitProcess(1)
             }
 
+            try {
+                // Get Monitoring List from Google Spreadsheets
+                val googleApi = GoogleApi(HOME_DIR, GOOGLE_CONFIG_FILE)
+                val sqlList = googleApi.getQueries(SHEET_ID, SHEET_RANGE)
+                execute(sqlList)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                exitProcess(1)
+            }
         }
 
-        private fun execute() {
-
-            println("Starting")
-
-            fileList.forEach { routine ->
-                sql.clear().let {
-                    BufferedReader(FileInputStream(routine).reader().buffered()).lines().forEach { sql.appendLine(it) }
-                }
-
-                println("\nRunning file -> ${routine.name} \n $sql")
-
+        private fun execute(sqlList: MutableList<SQL>) {
+            println("Iniciando")
+            val errors = StringBuilder()
+            sqlList.forEach { sql ->
+                if (!sql.enabled) return@forEach
+                println("Executando -> ${sql.name} \n ${sql.sqlQuery}")
+                val startInstant = Instant.now()
                 try {
-
-                    timestamp = Instant.now()
                     val affectedRows = executeSQL(sql.toString())
-
-                    affectedRows.indices.forEach { x -> println("\nQuery ${x + 1} affected ${affectedRows[x]} lines") }
-                    println(
-                        "\nScript Execution Time -> ${
-                            ((Instant.now().toEpochMilli() - timestamp.toEpochMilli()))
-                        } ms"
-                    )
-
-                    println("\nEnd of ${routine.name}")
-
+                    affectedRows.indices.forEach { x -> println("Query ${x + 1} affected ${affectedRows[x]} lines") }
+                    println("Script Execution Time -> ${((Instant.now().toEpochMilli() - startInstant.toEpochMilli()))} ms")
+                    println("End of ${sql.name}")
                 } catch (e: Exception) {
-
-                    println("\nAn error occurred while running file ${routine.name} \nError -> ${e.message} \n")
-                    errorCount++
-                    errorMsg.appendLine(
-                        "An error occurred while running file ${routine.name} \nError -> ${e.message} \nScript Execution Time -> ${
-                            ((Instant.now().toEpochMilli() - timestamp.toEpochMilli()))
-                        } ms"
-                    )
-
+                    println("\nAn error occurred while running file ${sql.name} \nError -> ${e.message} \n")
+                    errors.appendLine("An error occurred while running file " +
+                                "${sql.name} \nError -> ${e.message} \nScript Execution Time -> "
+                                + "${((Instant.now().toEpochMilli() - startInstant.toEpochMilli()))} ms")
+                if(sql.mailTo.isNotEmpty() && mailer != null) mailer!!.send(sql.mailTo,"Rundeck SQL Failed - ${sql.name} - $SHEET_RANGE",e.message.toString())
                 }
-
-
             }
-
-            println("Execution Finished\n")
-
-            if (errorCount > 0) {
-                println("Error Resume")
-                println(errorMsg.toString())
+            println("Finalizado")
+            if (errors.isNotEmpty()) {
+                println("Resumo de erros")
+                println(errors.toString())
                 exitProcess(1)
-            }
-
-            exitProcess(0)
-
+            } else exitProcess(0)
         }
 
         private fun executeSQL(sql: String): List<Int> {
-
-            val connection = DriverManager.getConnection(host, user, password)
-            //connection.setNetworkTimeout(Executors.newFixedThreadPool(1), 1500)
-
+            val connection = DriverManager.getConnection(DATABASE_ENDPOINT, DATABASE_USER, DATABASE_KEY)
             val affectedRows: List<Int>
-
             val queryList = sql.split(";").toMutableList()
             queryList.removeAt(queryList.lastIndex)
-
             val transact: Statement = connection.createStatement()
             transact.queryTimeout = 120
 
@@ -124,23 +110,16 @@ class Main {
             }
 
             try {
-
                 affectedRows = transact.executeBatch().toList()
-
             } catch (e: Exception) {
-
                 transact.close()
                 connection.close()
                 throw IOException(e.message)
-
             }
-
             transact.close()
             connection.close()
             return affectedRows
-
         }
 
     }
-
 }
