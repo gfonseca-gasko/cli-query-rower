@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package service
 
 import com.auth0.jwt.JWT
@@ -48,9 +50,7 @@ class GoogleApi(private var home: String, private var configFile: String) {
                 throw Exception("Erro ao obter a planilha - StatusCode ${response.statusCode()}")
             }
 
-            val jsonObject = JSONObject(response.body())
-            val sqlObjects = jsonObject.getJSONArray("values")
-
+            val sqlObjects = JSONObject(response.body()).getJSONArray("values")
             for (i in 0 until sqlObjects.length()) {
                 val sqlFields = sqlObjects.getJSONArray(i)
                 var mail = ""

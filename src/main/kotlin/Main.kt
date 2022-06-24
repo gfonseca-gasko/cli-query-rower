@@ -28,8 +28,7 @@ class Main {
                     when (it) {
                         "-sheetid" -> SHEET_ID = args[args.indexOf(it) + 1]
                         "-sheetrange" -> SHEET_RANGE = args[args.indexOf(it) + 1]
-                        "-dbhost" -> DATABASE_ENDPOINT =
-                            "jdbc:mysql://${args[args.indexOf(it) + 1]}:3306/?$DATABASE_PARAMETERS"
+                        "-dbhost" -> DATABASE_ENDPOINT = "jdbc:mysql://${args[args.indexOf(it) + 1]}:3306/?$DATABASE_PARAMETERS"
                         "-dbuser" -> DATABASE_USER = args[args.indexOf(it) + 1]
                         "-dbkey" -> DATABASE_KEY = args[args.indexOf(it) + 1]
                         "-mailuser" -> MAIL_USER = args[args.indexOf(it) + 1]
@@ -57,7 +56,6 @@ class Main {
                 errorMessage.append(e.message)
                 exitProcess(1)
             }
-
             try {
                 // Get Monitoring List from Google Spreadsheets
                 val googleApi = GoogleApi(HOME_DIR, GOOGLE_CONFIG_FILE)
@@ -70,47 +68,41 @@ class Main {
         }
 
         private fun execute(sqlList: MutableList<SQL>) {
-            println("Iniciando")
             val errors = StringBuilder()
+            println("Iniciando")
             sqlList.forEach { sql ->
+                val startInstant = Instant.now()
                 if (!sql.enabled) return@forEach
                 println("Executando -> ${sql.name} \n ${sql.sqlQuery}")
-                val startInstant = Instant.now()
                 try {
-                    val affectedRows = executeSQL(sql.toString())
-                    affectedRows.indices.forEach { x -> println("Query ${x + 1} affected ${affectedRows[x]} lines") }
-                    println("Script Execution Time -> ${((Instant.now().toEpochMilli() - startInstant.toEpochMilli()))} ms")
-                    println("End of ${sql.name}")
+                    val affectedRows = executeSQL(sql.sqlQuery)
+                    affectedRows.forEach { r -> println("Query ${affectedRows.indexOf(r) + 1} afetou $r linhas") }
+                    println("Tempo decorrido -> ${((Instant.now().toEpochMilli() - startInstant.toEpochMilli()))} ms")
                 } catch (e: Exception) {
-                    println("\nAn error occurred while running file ${sql.name} \nError -> ${e.message} \n")
-                    errors.appendLine("An error occurred while running file " +
-                                "${sql.name} \nError -> ${e.message} \nScript Execution Time -> "
-                                + "${((Instant.now().toEpochMilli() - startInstant.toEpochMilli()))} ms")
-                if(sql.mailTo.isNotEmpty() && mailer != null) mailer!!.send(sql.mailTo,"Rundeck SQL Failed - ${sql.name} - $SHEET_RANGE",e.message.toString())
+                    println("Ocorreu um erro ao executar ${sql.name}\nErro -> ${e.message}")
+                    errors.appendLine("Ocorreu um erro ao executar ${sql.name}\nErro -> ${e.message}\nTempo decorrido -> " + "${((Instant.now().toEpochMilli() - startInstant.toEpochMilli()))} ms")
+                    if (sql.mailTo.isNotEmpty() && mailer != null) {
+                        mailer!!.send(sql.mailTo, "Rundeck SQL Failed - ${sql.name} - $SHEET_RANGE", "${e.message}")
+                    }
                 }
             }
             println("Finalizado")
-            if (errors.isNotEmpty()) {
-                println("Resumo de erros")
-                println(errors.toString())
-                exitProcess(1)
-            } else exitProcess(0)
+            if (errors.isNotEmpty()) println("Resumo de erros \n$errors")
+             exitProcess(0)
         }
 
-        private fun executeSQL(sql: String): List<Int> {
+        private fun executeSQL(sql: String): MutableList<Long> {
             val connection = DriverManager.getConnection(DATABASE_ENDPOINT, DATABASE_USER, DATABASE_KEY)
-            val affectedRows: List<Int>
-            val queryList = sql.split(";").toMutableList()
-            queryList.removeAt(queryList.lastIndex)
             val transact: Statement = connection.createStatement()
             transact.queryTimeout = 120
 
-            queryList.indices.forEach { i ->
-                transact.addBatch(queryList[i])
-            }
+            val queryList = sql.split(";").toMutableList()
+            queryList.removeAt(queryList.lastIndex)
+            queryList.indices.forEach { i -> transact.addBatch(queryList[i]) }
 
+            val affectedRows: MutableList<Long>
             try {
-                affectedRows = transact.executeBatch().toList()
+                affectedRows = transact.executeLargeBatch().toMutableList()
             } catch (e: Exception) {
                 transact.close()
                 connection.close()
